@@ -1,27 +1,26 @@
 
 use std::collections::HashSet;
 
-use rusqlite::named_params;
+use serde::Serialize;
+use surrealdb::engine::local::Mem;
 
-use crate::db::{self, current_time, DbPool};
+use crate::db::DbPool;
 use super::DbSnapshot;
 
-const SNDB_TRACKING_DB: &str = "sndb_mutations";
-
-#[derive(Debug)]
+#[derive(Debug, Default, Serialize)]
 pub struct PostedProgram {
     pub program: Program,
     pub sheet: Sheet,
     pub parts: HashSet<Part>
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Default, PartialEq, Serialize)]
 pub struct Program {
     pub name: u32,
     pub machine: String,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Default, PartialEq, Serialize)]
 pub struct Sheet {
     pub name: String,
     pub grade: String,
@@ -30,14 +29,14 @@ pub struct Sheet {
     pub po: String
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Default, Clone, PartialEq, Eq, Hash, Serialize)]
 pub struct Part {
     pub name: String,
     pub wo: String,
     pub qty: u32
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 pub enum PostingChange {
     Posted,
     Deleted,
@@ -50,7 +49,7 @@ pub enum PostingChange {
 }
 
 impl PostedProgram {
-    pub async fn get_all_programs(pool: &mut DbPool) -> anyhow::Result<Vec<Self>> {
+    pub async fn get_all_active_programs(pool: &mut DbPool) -> anyhow::Result<Vec<Self>> {
         let tasks = pool.get().await?
             .simple_query( "SELECT ProgramName FROM Program" )
                 .await?
@@ -77,12 +76,8 @@ impl PostedProgram {
         )
     }
 
-    pub fn get_all_tracked_programs(conn: rusqlite::Connection) -> anyhow::Result<Vec<PostedProgram>> {
-        let mut stmt = conn.prepare("
-            SELECT snapshot
-            FROM snapshots
-        ")?;
-        let ids = stmt.query_map([], |row| row.get(0))?;
+    pub fn get_all_tracked_programs() -> anyhow::Result<Vec<PostedProgram>> {
+        // TODO: get all from SurrealDB
 
         Ok(vec![])
     }
@@ -90,9 +85,9 @@ impl PostedProgram {
     /// takes a snapshot of all programs in both databases
     pub async fn take_database_snapshot(pool: &mut DbPool) -> anyhow::Result<()> {
         // TODO: migrate to SurrealDB
-        let _tracking_db = rusqlite::Connection::open( SNDB_TRACKING_DB );
+        let _tracking_db = super::TRACKING_DB.connect::<Mem>(()).await?;
 
-        let _active_programs = Self::get_all_programs(pool).await?;
+        let _active_programs = Self::get_all_active_programs(pool).await?;
         // let tracked_programs = Self::
 
         Ok(())
@@ -101,103 +96,21 @@ impl PostedProgram {
 
 impl DbSnapshot for PostedProgram {
     type ChangeType = PostingChange;
-    type TrackingConnection = rusqlite::Connection;
     type SrcConnection = crate::db::DbClient;
 
     fn get_id(&self) -> &u32 {
         &self.program.name
     }
 
-    fn record(&self, conn: &Self::TrackingConnection) -> anyhow::Result<()> {
-        // Insert the program record into the programs table
-        let mut stmt = conn.prepare("
-            INSERT INTO snapshots (program, timestamp)
-            VALUES (:name, :timestamp)
-        ")?;
-        stmt.execute(named_params! {
-            ":name": self.program.name,
-            ":timestamp": current_time().timestamp()
-        })?;
-    
-        // Get the ID of the newly inserted program record
-        let program_id = conn.last_insert_rowid();
-    
-        // Insert the part records into the parts table, using the program ID as a foreign key
-        let mut stmt = conn.prepare("
-            INSERT INTO parts (program_id, name, qty)
-            VALUES (:id, :part, :qty)
-        ")?;
-        for part in &self.parts {
-            stmt.execute(named_params! {
-                ":id": program_id,
-                ":part": part.name,
-                ":qty": part.qty
-            })?;
-        }
-    
+    fn record(&self) -> anyhow::Result<()> {
+        // TODO: impl
         Ok(())
     }
 
-    fn get_latest(conn: &Self::TrackingConnection, id: u32) -> anyhow::Result<Option<Self>> where Self: Sized {
-        // Query the programs table for the program record with the specified ID
-        let mut stmt = conn.prepare("
-            SELECT TOP 1
-                program,
-                sheet_name,
-                sheet_grade,
-                sheet_mm,
-                sheet_heat,
-                sheet_po,
-                machine
-            FROM programs
-            WHERE program = :id
-            ORDER BY snapshot DESC
-        ")?;
-        let program_row = stmt.query_row(&[(":id", &id)],
-        |row| {
-            Ok(Self {
-                program: Program {
-                    machine: row.get("machine")?,
-                    name: row.get("program")?,
-                },
-                sheet: Sheet {
-                    name: row.get("sheet_name")?,
-                    grade: row.get("sheet_grade")?,
-                    mm: row.get("sheet_mm")?,
-                    heat: row.get("sheet_heat")?,
-                    po: row.get("sheet_po")?
-                },
-                parts: HashSet::new()   // temporary, filled below
-            })
-        });
+    fn get_latest(id: u32) -> anyhow::Result<Option<Self>> where Self: Sized {
+        // TODO: impl
     
-        // If no program record is found with the specified ID, return None
-        let mut program = match program_row {
-            Ok(program) => program,
-            Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(None),
-            Err(err) => return Err(err.into())
-        };
-    
-        // Query the parts table for all part records associated with the program ID
-        let mut stmt = conn.prepare("
-            SELECT
-                name, workorder, qty
-            FROM parts
-            WHERE program_id = :id
-        ")?;
-        let part_rows = stmt.query_map(&[(":id", &id)],
-        |row| {
-            Ok(Part {
-                name: row.get("name")?,
-                wo: row.get("workorder")?,
-                qty: row.get("qty")?
-            })
-        })?;
-    
-        // Add the part records to the program struct
-        program.parts = HashSet::from_iter( part_rows.map( |row| row.unwrap() ) );
-    
-        Ok(Some(program))
+        Ok(Some(Self::default()))
     }
 
     async fn get_src_data<S: AsRef<str>>(conn: &mut Self::SrcConnection, id: S) -> anyhow::Result<Self> where Self: Sized {

@@ -3,7 +3,12 @@ pub mod program;
 
 use std::collections::BTreeMap;
 
+use surrealdb::Surreal;
+use surrealdb::engine::local::Db;
 use tiberius::time::chrono::NaiveDateTime;
+
+
+static TRACKING_DB: Surreal<Db> = surrealdb::Surreal::init();
 
 pub trait DbSnapshot
 {
@@ -11,16 +16,14 @@ pub trait DbSnapshot
     type ChangeType;
     /// Connection type for the source database
     type SrcConnection;
-    /// Connection type for the tracking database
-    type TrackingConnection;
 
     /// get identifying key for snapshot
     fn get_id(&self) -> &u32;
 
     /// records mutation in tracking database
-    fn record(&self, conn: &Self::TrackingConnection) -> anyhow::Result<()>;
+    fn record(&self) -> anyhow::Result<()>;
     /// gets mutation from tracking database
-    fn get_latest(conn: &Self::TrackingConnection, id: u32) -> anyhow::Result<Option<Self>> where Self: Sized;
+    fn get_latest(id: u32) -> anyhow::Result<Option<Self>> where Self: Sized;
     /// gets latest data from source database
     async fn get_src_data<S: AsRef<str>>(conn: &mut Self::SrcConnection, id: S) -> anyhow::Result<Self> where Self: Sized;
 
