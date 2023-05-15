@@ -1,5 +1,7 @@
 [package]
-name = "sn-test"
+name = "db-mutations-tracker"
+description = "Database mutations tracker for databases that don't do this"
+authors = ["Patrick Miller"]
 version = "0.1.0"
 edition = "2021"
 
@@ -14,6 +16,7 @@ clap = { version = "4.2.7", features = ["derive", "cargo"] }
 futures = "0.3.28"
 rusqlite = "0.29.0"
 serde = { version = "1.0.162", features = ["derive"] }
+surrealdb = "1.0.0-beta.9"
 tiberius = { version = "0.12.2", features = ["sql-browser-tokio", "integrated-auth-gssapi"] }
 tokio = { version = "1.28.1", features = ["rt-multi-thread", "net", "sync", "macros"] }
 tokio-util = { version = "0.7.8", features = ["compat"] }
