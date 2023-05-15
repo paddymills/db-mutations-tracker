@@ -1,0 +1,19 @@
+[package]
+name = "sn-test"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+anyhow = "1.0.71"
+bb8 = "0.8.0"
+bb8-tiberius = "0.15.0"
+chrono = "0.4.24"
+clap = { version = "4.2.7", features = ["derive", "cargo"] }
+futures = "0.3.28"
+rusqlite = "0.29.0"
+serde = { version = "1.0.162", features = ["derive"] }
+tiberius = { version = "0.12.2", features = ["sql-browser-tokio", "integrated-auth-gssapi"] }
+tokio = { version = "1.28.1", features = ["rt-multi-thread", "net", "sync", "macros"] }
+tokio-util = { version = "0.7.8", features = ["compat"] }
