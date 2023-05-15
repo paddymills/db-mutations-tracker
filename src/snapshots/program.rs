@@ -1,26 +1,22 @@
 
 use std::collections::HashSet;
 
-use serde::Serialize;
-use surrealdb::engine::local::Mem;
+use crate::db::{DbClient, DbPool};
 
-use crate::db::DbPool;
-use super::DbSnapshot;
-
-#[derive(Debug, Default, Serialize)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 pub struct PostedProgram {
     pub program: Program,
     pub sheet: Sheet,
     pub parts: HashSet<Part>
 }
 
-#[derive(Debug, Default, PartialEq, Serialize)]
+#[derive(Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Program {
     pub name: u32,
     pub machine: String,
 }
 
-#[derive(Debug, Default, PartialEq, Serialize)]
+#[derive(Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Sheet {
     pub name: String,
     pub grade: String,
@@ -29,14 +25,14 @@ pub struct Sheet {
     pub po: String
 }
 
-#[derive(Debug, Default, Clone, PartialEq, Eq, Hash, Serialize)]
+#[derive(Debug, Default, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Part {
     pub name: String,
     pub wo: String,
     pub qty: u32
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub enum PostingChange {
     Posted,
     Deleted,
@@ -49,6 +45,59 @@ pub enum PostingChange {
 }
 
 impl PostedProgram {
+    pub async fn get_src_data<S: AsRef<str>>(conn: &mut DbClient, id: S) -> tiberius::Result<Self> {
+        // Query the programs table for the program record with the specified ID
+        let program_row = conn
+            .query(
+                "
+                    SELECT
+                        Program.ProgramName AS program,
+                        Program.MachineName AS machine,
+                        Stock.SheetName     AS sheet,
+                        Stock.Material      AS grade,
+                        Stock.PrimeCode     AS material,
+                        Stock.HeatNumber    AS heat,
+                        Stock.BinNumber     AS po
+                    FROM Program
+                    INNER JOIN Stock
+                        ON Program.SheetName = Stock.SheetName
+                    WHERE Program.ProgramName = @P1
+                ", &[&id.as_ref()]
+            )
+            .await?
+            .into_row()
+            .await?
+            .ok_or_else(|| tiberius::error::Error::Protocol("no program found".into()))?;
+
+        Ok( PostedProgram::from(program_row) )
+    }
+
+    pub async fn get_parts(&mut self, conn: &mut DbClient) -> tiberius::Result<()> {
+        // Query the parts table for all part records associated with the program ID
+        let mut part_rows = conn.query(
+            "
+                SELECT
+                    PartName     AS part,
+                    WONumber     AS workorder,
+                    QtyInProcess AS qty
+                FROM PIP
+                WHERE ProgramName = @P1
+            ", &[&self.program.name.to_string()]
+        ).await?
+        .into_first_result().await?
+        .into_iter();
+
+        while let Some(part_row) = part_rows.next() {
+            self.parts.insert(Part {
+                name: part_row.get::<&str, _>("name").unwrap().into(),
+                wo:   part_row.get::<&str, _>("workorder").unwrap().into(),
+                qty:  part_row.get::<i32,  _>("qty" ).unwrap().unsigned_abs(),
+            });
+        }
+
+        Ok(())
+    }
+
     pub async fn get_all_active_programs(pool: &mut DbPool) -> anyhow::Result<Vec<Self>> {
         let tasks = pool.get().await?
             .simple_query( "SELECT ProgramName FROM Program" )
@@ -76,115 +125,14 @@ impl PostedProgram {
         )
     }
 
-    pub fn get_all_tracked_programs() -> anyhow::Result<Vec<PostedProgram>> {
-        // TODO: get all from SurrealDB
-
-        Ok(vec![])
-    }
-
-    /// takes a snapshot of all programs in both databases
-    pub async fn take_database_snapshot(pool: &mut DbPool) -> anyhow::Result<()> {
-        // TODO: migrate to SurrealDB
-        let _tracking_db = super::TRACKING_DB.connect::<Mem>(()).await?;
-
-        let _active_programs = Self::get_all_active_programs(pool).await?;
-        // let tracked_programs = Self::
-
-        Ok(())
-    }
-}
-
-impl DbSnapshot for PostedProgram {
-    type ChangeType = PostingChange;
-    type SrcConnection = crate::db::DbClient;
-
-    fn get_id(&self) -> &u32 {
-        &self.program.name
-    }
-
-    fn record(&self) -> anyhow::Result<()> {
-        // TODO: impl
-        Ok(())
-    }
-
-    fn get_latest(id: u32) -> anyhow::Result<Option<Self>> where Self: Sized {
-        // TODO: impl
-    
-        Ok(Some(Self::default()))
-    }
-
-    async fn get_src_data<S: AsRef<str>>(conn: &mut Self::SrcConnection, id: S) -> anyhow::Result<Self> where Self: Sized {
-        // Query the programs table for the program record with the specified ID
-        let program_row = conn
-            .query(
-                "
-                    SELECT
-                        Program.ProgramName AS program,
-                        Program.MachineName AS machine,
-                        Stock.SheetName     AS sheet,
-                        Stock.Material      AS grade,
-                        Stock.PrimeCode     AS material,
-                        Stock.HeatNumber    AS heat,
-                        Stock.BinNumber     AS po
-                    FROM Program
-                    INNER JOIN Stock
-                        ON Program.SheetName = Stock.SheetName
-                    WHERE Program.ProgramName = @P1
-                ", &[&id.as_ref()]
-            )
-            .await?
-            .into_row()
-            .await?
-            .ok_or_else(|| tiberius::error::Error::Protocol("no program found".into()))?;
-
-        let mut posted = PostedProgram {
-            program: Program {
-                name:    program_row.get::<&str, _>("program" ).unwrap().parse()?,
-                machine: program_row.get::<&str, _>("machine" ).unwrap().into(),
-            },
-            sheet: Sheet {
-                name:    program_row.get::<&str, _>("sheet"   ).unwrap().into(),
-                grade:   program_row.get::<&str, _>("grade"   ).unwrap().into(),
-                mm:      program_row.get::<&str, _>("material").unwrap().into(),
-                heat:    program_row.get::<&str, _>("heat"    ).unwrap().into(),
-                po:      program_row.get::<&str, _>("po"      ).unwrap().into(),
-            },
-            parts: HashSet::new()
-        };
-
-        // Query the parts table for all part records associated with the program ID
-        let mut part_rows = conn.query(
-            "
-                SELECT
-                    PartName     AS part,
-                    WONumber     AS workorder,
-                    QtyInProcess AS qty
-                FROM PIP
-                WHERE ProgramName = @P1
-            ", &[&posted.program.name.to_string()]
-        ).await?
-        .into_first_result().await?
-        .into_iter();
-
-        while let Some(part_row) = part_rows.next() {
-            posted.parts.insert(Part {
-                name: part_row.get::<&str, _>("name").unwrap().into(),
-                wo:   part_row.get::<&str, _>("workorder").unwrap().into(),
-                qty:  part_row.get::<i32,  _>("qty" ).unwrap().unsigned_abs(),
-            });
-        }
-
-        Ok( posted )
-    }
-
-    async fn not_found_in_src_change(&self, conn: &mut Self::SrcConnection) -> anyhow::Result<Self::ChangeType> {
+    pub async fn is_updated_or_deleted(&self, conn: &mut DbClient) -> anyhow::Result<PostingChange> {
         let program_row = conn
             .query(
                 "
                     SELECT TransType
                     FROM ProgArchive
                     WHERE ProgramName = @P1
-                ", &[&self.get_id().to_string()]
+                ", &[&self.program.name.to_string()]
             )
             .await?
             .into_row()
@@ -194,11 +142,11 @@ impl DbSnapshot for PostedProgram {
         match program_row.get("TransType").unwrap() {
             "SN101"   => Ok( PostingChange::Deleted   ),
             "SN102"   => Ok( PostingChange::Completed ),
-            transtype => Err( anyhow!("Unexpected TransType `{}` for program `{}`", transtype, self.get_id()) )
+            transtype => Err( anyhow!("Unexpected TransType `{}` for program `{}`", transtype, self.program.name) )
         }
     }
 
-    fn calculate_changes(&self, mut latest: PostedProgram) -> Option<Vec<Self::ChangeType>> {
+    pub fn calculate_changes(&self, mut latest: Self) -> Option<Vec<PostingChange>> {
         if self == &latest {
             return None;
         }
@@ -238,6 +186,43 @@ impl DbSnapshot for PostedProgram {
         );
 
         Some(changes)
+    }
+
+    pub fn get_all_tracked_programs() -> anyhow::Result<Vec<PostedProgram>> {
+        // TODO: get all from SurrealDB
+
+        Ok(vec![])
+    }
+
+    /// takes a snapshot of all programs in both databases
+    pub async fn take_database_snapshot(pool: &mut DbPool) -> anyhow::Result<()> {
+        let _tracking_db = super::tracking::get_db().await?;
+
+        let _active_programs = Self::get_all_active_programs(pool).await?;
+        // let tracked_programs = Self::
+
+        Ok(())
+    }
+}
+
+impl From<tiberius::Row> for PostedProgram {
+    fn from(row: tiberius::Row) -> Self {
+        let name = row.get::<&str, _>("program" ).unwrap();
+
+        PostedProgram {
+            program: Program {
+                name:    name.parse().expect(&format!("Failed to parse program name; `{}`", name)),
+                machine: row.get::<&str, _>("machine" ).unwrap().into(),
+            },
+            sheet: Sheet {
+                name:    row.get::<&str, _>("sheet"   ).unwrap().into(),
+                grade:   row.get::<&str, _>("grade"   ).unwrap().into(),
+                mm:      row.get::<&str, _>("material").unwrap().into(),
+                heat:    row.get::<&str, _>("heat"    ).unwrap().into(),
+                po:      row.get::<&str, _>("po"      ).unwrap().into(),
+            },
+            parts: HashSet::new()
+        }
     }
 }
 
