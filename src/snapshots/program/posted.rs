@@ -1,6 +1,7 @@
 
 use std::collections::HashSet;
 
+use super::*;
 use crate::db::{DbClient, DbPool};
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -8,40 +9,6 @@ pub struct PostedProgram {
     pub program: Program,
     pub sheet: Sheet,
     pub parts: HashSet<Part>
-}
-
-#[derive(Debug, Default, PartialEq, Serialize, Deserialize)]
-pub struct Program {
-    pub name: u32,
-    pub machine: String,
-}
-
-#[derive(Debug, Default, PartialEq, Serialize, Deserialize)]
-pub struct Sheet {
-    pub name: String,
-    pub grade: String,
-    pub mm: String,
-    pub heat: String,
-    pub po: String
-}
-
-#[derive(Debug, Default, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct Part {
-    pub name: String,
-    pub wo: String,
-    pub qty: u32
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub enum PostingChange {
-    Posted,
-    Deleted,
-    Completed,
-    NewSheet(Sheet),
-    UpdatedSheetData(Sheet),
-    AddPart(Part),
-    ChangePartQty(u32),
-    DeletePart(Part),
 }
 
 impl PostedProgram {
@@ -125,11 +92,13 @@ impl PostedProgram {
         )
     }
 
-    pub async fn is_updated_or_deleted(&self, conn: &mut DbClient) -> anyhow::Result<PostingChange> {
+    pub async fn is_updated_or_deleted(&self, conn: &mut DbClient) -> anyhow::Result<ProgramStatus> {
         let program_row = conn
             .query(
                 "
-                    SELECT TransType
+                    SELECT
+                        ArcDateTime AS timestamp,
+                        TransType   AS tcode
                     FROM ProgArchive
                     WHERE ProgramName = @P1
                 ", &[&self.program.name.to_string()]
@@ -139,9 +108,11 @@ impl PostedProgram {
             .await?
             .ok_or_else(|| tiberius::error::Error::Protocol("no program found".into()))?;
 
-        match program_row.get("TransType").unwrap() {
-            "SN101"   => Ok( PostingChange::Deleted   ),
-            "SN102"   => Ok( PostingChange::Completed ),
+        let timestamp = program_row.get("timestamp").unwrap();
+        match program_row.get("tcode").unwrap() {
+            "SN100"   => Ok( ProgramStatus::Posted (timestamp) ),
+            "SN101"   => Ok( ProgramStatus::Deleted(timestamp) ),
+            "SN102"   => Ok( ProgramStatus::Updated(timestamp) ),
             transtype => Err( anyhow!("Unexpected TransType `{}` for program `{}`", transtype, self.program.name) )
         }
     }
@@ -196,7 +167,7 @@ impl PostedProgram {
 
     /// takes a snapshot of all programs in both databases
     pub async fn take_database_snapshot(pool: &mut DbPool) -> anyhow::Result<()> {
-        let _tracking_db = super::tracking::get_db().await?;
+        let _tracking_db = super::super::tracking::get_db().await?;
 
         let _active_programs = Self::get_all_active_programs(pool).await?;
         // let tracked_programs = Self::
