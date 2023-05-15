@@ -1,4 +1,4 @@
-use sn_test::db;
+use db_mutations_tracker::db;
 use tiberius::Query;
 
 #[tokio::main]
