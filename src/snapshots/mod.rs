@@ -1,6 +1,6 @@
 
 pub mod program;
-pub mod tracking;
+pub use crate::db::tracking;
 
 use std::collections::BTreeMap;
 use tiberius::time::chrono::NaiveDateTime;
