@@ -16,6 +16,9 @@ use chrono::NaiveDateTime;
 
 pub static TRACKING_TABLE: &str = "program";
 
+// max number of seconds between transactions to be considered a repost
+static REPOST_DURATION: i64 = 15;
+
 #[derive(Debug, Serialize, Deserialize)]
 pub enum ProgramStatus {
     Posted(NaiveDateTime),
@@ -32,6 +35,7 @@ pub enum PostingChange {
         parts: HashSet<Part>
     },
     Deleted(NaiveDateTime),
+    RePosted,
     Completed(NaiveDateTime),   // TODO: add operator
     ChangeMachine(String),
     SwapSheet(Sheet),
@@ -39,6 +43,25 @@ pub enum PostingChange {
     AddPart(Part),
     ChangePartQty(Part),
     DeletePart(Part),
+}
+
+impl PostingChange {
+    pub fn is_reposting(first: &Self, second: &Self) -> bool {
+        if matches!(first, &Self::Deleted(_)) {
+            return Self::is_reposting(second, first);
+        }
+
+        if let &Self::Posted { timestamp: when_posted, .. } = first {
+            if let &Self::Deleted(when_deleted) = second {
+                // equivalent to the mathematical statement: |when_posted - when_deleted| < REPOST_DURATION
+                if when_posted.signed_duration_since(when_deleted).num_seconds().abs() < REPOST_DURATION {
+                    return true;
+                }
+            }
+        }
+
+        false
+    }
 }
 
 impl From<ProgramStatus> for PostingChange {

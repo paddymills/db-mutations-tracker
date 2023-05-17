@@ -72,9 +72,50 @@ impl ProgramHistory {
                 PostingChange::AddPart(part)                => { result.parts.insert(part); },
                 PostingChange::ChangePartQty(part)          => { result.parts.insert(part); },
                 PostingChange::DeletePart(part)             => { result.parts.remove(&part); },
+
+                PostingChange::RePosted => (),
             }
         }
 
         Ok(result)
+    }
+
+    /// Flattens the dual-entry in reposting
+    /// 
+    /// When a program is re-posted, Sigmanest actually does a Delete and a Post (SN101, SN100).
+    /// These transactions have timestamps close to eachother, but may not be the same.
+    /// The order of these transactions cannot be guaranteed either.
+    pub fn flatten_repost(&mut self) {
+        // let mut iter = self.changes.iter_mut();
+        
+        let mut reposts = Vec::new();
+        let mut iter = self.changes.iter().enumerate().peekable();
+        while let Some((i, current)) = iter.next() {
+            if let Some((_, next)) = iter.peek() {
+                if PostingChange::is_reposting(current, next) {
+                    // save location for removal
+                    reposts.push(i);
+
+                    // advance iterator in case next changes are a repost
+                    // i.e. ... -> Post -> Delete -> Post -> Delete -> ...
+                    //  will cause 3 Post/Delete pairs ot be removed
+                    //  and only 1 Repost to be added
+                    iter.next();
+                }
+            }
+        }
+
+        // iterate in reverse
+        for i in reposts.into_iter().rev() {
+            let mut second_half = self.changes
+                .split_off(i)   // split linked list before Delete/Post transaction pair
+                .split_off(2);  // drop Delete/Post pair
+
+            // push reposting status
+            self.changes.push_back(PostingChange::RePosted);
+            
+            // re-attach second half
+            self.changes.append(&mut second_half);
+        }
     }
 }
