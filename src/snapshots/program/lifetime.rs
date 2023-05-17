@@ -2,7 +2,7 @@
 use std::collections::LinkedList;
 
 use super::tracking::get_db;
-use super::{PostingChange, ProgramStateSnapshot, ProgramStatus, TRACKING_TABLE};
+use super::{PostingChange, ProgramStateSnapshot, TRACKING_TABLE};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ProgramHistory {
