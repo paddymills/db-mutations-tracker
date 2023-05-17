@@ -20,6 +20,13 @@ impl ProgramHistory {
         Self { program: name.to_string(), changes }
     }
 
+    pub async fn get_tracked<S: AsRef<str>>(program_number: S) -> surrealdb::Result<Self> {
+        get_db().await?
+            .select(
+                (TRACKING_TABLE, program_number.as_ref())
+            ).await
+    }
+
     pub async fn record(&self) -> surrealdb::Result<()> {
         get_db().await?
             .create((TRACKING_TABLE, &self.program))
@@ -27,13 +34,6 @@ impl ProgramHistory {
             .await?;
 
         Ok(())
-    }
-
-    pub async fn get_tracked<S: AsRef<str>>(program_number: S) -> surrealdb::Result<Self> {
-        get_db().await?
-            .select(
-                (TRACKING_TABLE, program_number.as_ref())
-            ).await
     }
 
     pub async fn get_current_state<S: AsRef<str> + ToString>(program_number: S) -> surrealdb::Result<ProgramStateSnapshot> {
