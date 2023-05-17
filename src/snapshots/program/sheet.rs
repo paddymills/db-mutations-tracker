@@ -1,5 +1,5 @@
 
-#[derive(Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Sheet {
     pub name: String,
     pub grade: String,
@@ -9,14 +9,14 @@ pub struct Sheet {
 }
 
 impl Sheet {
-    pub fn update(&mut self, data: Vec<SheetData>) {
+    pub fn update(&mut self, data: &Vec<SheetData>) {
         for data_point in data {
             match data_point {
                 // name change should not happen because that is a different sheet
-                SheetData::Grade(grade)       => self.grade = grade,
-                SheetData::MaterialMaster(mm) => self.mm    = mm,
-                SheetData::HeatNumber(heat)   => self.heat  = heat,
-                SheetData::PoNumber(po)       => self.po    = po,
+                SheetData::Grade(grade)       => self.grade = grade.to_string(),
+                SheetData::MaterialMaster(mm) => self.mm    = mm.to_string(),
+                SheetData::HeatNumber(heat)   => self.heat  = heat.to_string(),
+                SheetData::PoNumber(po)       => self.po    = *po,
             }
         }
     }

@@ -36,48 +36,27 @@ impl ProgramHistory {
         Ok(())
     }
 
-    pub async fn get_current_state<S: AsRef<str> + ToString>(program_number: S) -> surrealdb::Result<ProgramStateSnapshot> {
-        let program = Self::get_tracked(&program_number).await?;
-
-        // Traverse linked list to build final state
-        let mut history = program.changes.into_iter();
-        let mut result = match history.next() {
-            Some( PostingChange::Posted { timestamp, machine, sheet, parts } ) => 
-            ProgramStateSnapshot { 
-                name: program_number.to_string(),
-                machine,
-                sheet,
-                parts,
-                status: ProgramStatus::Posted(timestamp),
-            },
-            _ => panic!("ProgramHistory head must be PostingChange::Posted")
-        };
-
-        while let Some(state) = history.next() {
-            match state {
-                PostingChange::Posted { timestamp, machine, sheet, parts } => {
-                    result = ProgramStateSnapshot { 
-                        name: result.name,
-                        machine,
-                        sheet,
-                        parts,
-                        status: ProgramStatus::Posted(timestamp),
-                    }
-                },
-                PostingChange::Deleted(ts)                  => { result.status  = ProgramStatus::Deleted(ts); },
-                PostingChange::Completed(ts)                => { result.status  = ProgramStatus::Updated(ts); },
-                PostingChange::ChangeMachine(mach)          => { result.machine = mach; },
-                PostingChange::SwapSheet(sheet)             => { result.sheet   = sheet; },
-                PostingChange::UpdatedSheetData(sheet_data) => { result.sheet.update(sheet_data); },
-                PostingChange::AddPart(part)                => { result.parts.insert(part); },
-                PostingChange::ChangePartQty(part)          => { result.parts.insert(part); },
-                PostingChange::DeletePart(part)             => { result.parts.remove(&part); },
-
-                PostingChange::RePosted => (),
-            }
+    pub async fn update_state(&mut self, state: ProgramStateSnapshot) -> surrealdb::Result<()> {
+        let current_state = self.get_current_state();
+        if let Some(changes) = state.calculate_changes(current_state) {
+            changes
+                .into_iter()
+                .for_each(|change| self.changes.push_back(change));
         }
 
-        Ok(result)
+        self.flatten_repost();
+        self.record().await?;
+
+        Ok(())
+    }
+
+    pub fn get_current_state(&self) -> ProgramStateSnapshot {
+        let mut iter = self.changes.iter();
+        let mut initial: ProgramStateSnapshot = iter.next().unwrap().into();
+        initial.name = self.program.to_string();
+
+        // Traverse linked list to build final state
+        iter.fold(initial, |acc, change| acc.update(change))
     }
 
     /// Flattens the dual-entry in reposting

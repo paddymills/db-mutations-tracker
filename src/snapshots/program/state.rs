@@ -1,12 +1,14 @@
 
 use std::collections::HashSet;
 
+use tiberius::time;
+
 use super::{*, tracking::get_db};
 use crate::db::DbClient;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ProgramStateSnapshot {
-    pub name: String,
+    pub name: String,   // TODO: remove name, if possible
     pub machine: String,
     pub sheet: Sheet,
     pub parts: HashSet<Part>,
@@ -83,7 +85,7 @@ impl ProgramStateSnapshot {
 
         let timestamp = program_row.get("timestamp").unwrap();
         match program_row.get("tcode").unwrap() {
-            "SN100"   => Ok( ProgramStatus::Posted (timestamp) ),
+            "SN100"   => Ok( ProgramStatus::Posted (timestamp) ),   // unlikely, but possible
             "SN101"   => Ok( ProgramStatus::Deleted(timestamp) ),
             "SN102"   => Ok( ProgramStatus::Updated(timestamp) ),
             transtype => Err( anyhow!("Unexpected TransType `{}` for program `{}`", transtype, self.name) )
@@ -136,6 +138,29 @@ impl ProgramStateSnapshot {
         get_db().await?
             .select(TRACKING_TABLE).await
     }
+
+    pub fn update(mut self, change: &PostingChange) -> Self {
+        match change {
+            PostingChange::Posted { timestamp, machine, sheet, parts } => {
+                self.machine = machine.to_string();
+                self.sheet = sheet.clone();
+                self.parts = parts.clone();
+                self.status = ProgramStatus::Posted(*timestamp);
+            },
+            PostingChange::Deleted(ts)                  => { self.status  = ProgramStatus::Deleted(*ts); },
+            PostingChange::Completed(ts)                => { self.status  = ProgramStatus::Updated(*ts); },
+            PostingChange::ChangeMachine(mach)          => { self.machine = mach.to_string(); },
+            PostingChange::SwapSheet(sheet)             => { self.sheet   = sheet.clone(); },
+            PostingChange::UpdatedSheetData(sheet_data) => { self.sheet.update(sheet_data); },
+            PostingChange::AddPart(part)                => { self.parts.insert(part.clone()); },
+            PostingChange::ChangePartQty(part)          => { self.parts.insert(part.clone()); },
+            PostingChange::DeletePart(part)             => { self.parts.remove(&part); },
+
+            PostingChange::RePosted => (),
+        }
+
+        self
+    }
 }
 
 impl From<tiberius::Row> for ProgramStateSnapshot {
@@ -153,6 +178,22 @@ impl From<tiberius::Row> for ProgramStateSnapshot {
             },
             parts: HashSet::new(),
             status: ProgramStatus::Posted(row.get("timestamp").unwrap())
+        }
+    }
+}
+
+impl From<&PostingChange> for ProgramStateSnapshot {
+    fn from(value: &PostingChange) -> Self {
+        match value {
+            PostingChange::Posted { timestamp, machine, sheet, parts } =>
+                Self {
+                    name: String::new(),
+                    machine: machine.to_string(),
+                    sheet: sheet.clone(),
+                    parts: parts.clone(),
+                    status: ProgramStatus::Posted(*timestamp)
+                },
+            _ => panic!("ProgramStateSnapshot can only be built from PostingChange::Posted variant")
         }
     }
 }
